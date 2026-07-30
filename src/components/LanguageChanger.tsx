@@ -1,18 +1,21 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { usePathname } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { useTranslation } from "react-i18next";
 import i18nConfig from "@/i18nConfig";
-import { ChangeEvent } from "react";
+import { MenuItem, Select, SelectChangeEvent } from "@mui/material";
 
-export default function LanguageChanger() {
+export default function LanguageChanger({
+  variant = "default",
+}: {
+  variant?: "default" | "onDark";
+}) {
   const { i18n } = useTranslation();
   const currentLocale = i18n.language;
   const router = useRouter();
   const currentPathname = usePathname();
 
-  const handleChange = (e: ChangeEvent<HTMLSelectElement>) => {
+  const handleChange = (e: SelectChangeEvent) => {
     const newLocale = e.target.value;
 
     // set cookie for next-i18n-router
@@ -35,10 +38,31 @@ export default function LanguageChanger() {
     }
   };
 
+  const onDark = variant === "onDark";
+
   return (
-    <select onChange={handleChange} value={currentLocale}>
-      <option value="en">English</option>
-      <option value="fr">Français</option>
-    </select>
+    <Select
+      value={currentLocale}
+      onChange={handleChange}
+      size="small"
+      variant="standard"
+      disableUnderline
+      MenuProps={{ disableScrollLock: true }}
+      sx={{
+        fontSize: 13,
+        fontWeight: 700,
+        letterSpacing: "0.02em",
+        borderRadius: 5,
+        px: 1.25,
+        py: 0.25,
+        color: onDark ? "#fff" : "text.primary",
+        bgcolor: onDark ? "rgba(255,255,255,0.16)" : "action.hover",
+        "& .MuiSelect-icon": { color: onDark ? "#fff" : "text.secondary" },
+        "& .MuiSelect-select": { py: 0.25, pr: "24px !important" },
+      }}
+    >
+      <MenuItem value="en">EN</MenuItem>
+      <MenuItem value="fr">FR</MenuItem>
+    </Select>
   );
 }

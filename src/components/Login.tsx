@@ -22,7 +22,7 @@ export default function Login() {
 
   useEffect(() => {
     if (status === "authenticated" && session.user?.name) {
-      router.push(`/${i18n.language}/about`);
+      router.push(`/${i18n.language}`);
     }
   }, [status, session, router, i18n.language]);
 
