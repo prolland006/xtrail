@@ -7,6 +7,9 @@ export type Activity = {
   moving_time: number;
   type: string;
   start_date_local: string;
+  map?: {
+    summary_polyline: string;
+  };
 };
 
 export async function getValidAccessToken() {

@@ -55,6 +55,15 @@ export default function Menu() {
           >
             {t("about")}
           </Typography>
+          <Typography
+            component={Link}
+            href="/map"
+            variant="body2"
+            fontWeight={600}
+            sx={{ color: "#fff", textDecoration: "none" }}
+          >
+            {t("map")}
+          </Typography>
         </Stack>
 
         <Box sx={{ flex: 1 }} />

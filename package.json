@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "postinstall": "node scripts/copy-maplibre-worker.js"
   },
   "dependencies": {
     "@emotion/react": "^11.11.1",
@@ -17,6 +18,7 @@
     "@mui/material-nextjs": "^5.18.0",
     "i18next": "^23.5.1",
     "i18next-resources-to-backend": "^1.1.4",
+    "maplibre-gl": "^6.1.0",
     "negotiator": "^0.6.3",
     "next": "14.0.4",
     "next-auth": "^4.24.5",
