@@ -26,10 +26,16 @@ yarn-debug.log*
 yarn-error.log*
 
 # local env files
+.env
 .env*.local
 
 # vercel
 .vercel
+
+# docker (local overrides / scratch state — the named volume itself lives inside
+# Docker's own storage, not under this directory, so there is nothing to ignore for it)
+docker-compose.override.yml
+.docker/
 
 # typescript
 *.tsbuildinfo
