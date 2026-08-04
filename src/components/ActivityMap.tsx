@@ -4,7 +4,8 @@ import { useEffect, useRef } from "react";
 import { Map as MapLibreMap, LngLatBounds, NavigationControl, setWorkerUrl } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { decodePolyline } from "@/lib/polyline";
-import { convexHull } from "@/lib/convexHull";
+import { hexagonBoundary, hexagonsForRoute, resolutionForDiameterMeters } from "@/lib/h3";
+import { HEX_DIAMETER_METERS } from "@/config/h3";
 
 // Free, no-account vector tiles (OpenFreeMap) — no API key required.
 const MAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
@@ -29,8 +30,12 @@ export default function ActivityMap({ polyline }: { polyline: string }) {
       new LngLatBounds(routeCoords[0], routeCoords[0])
     );
 
-    const hull = convexHull(routeCoords);
-    const hullRing = hull.length >= 3 ? [...hull, hull[0]] : null;
+    const resolution = resolutionForDiameterMeters(HEX_DIAMETER_METERS);
+    const hexFeatures = hexagonsForRoute(routeCoords, resolution).map((h3Index) => ({
+      type: "Feature" as const,
+      properties: {},
+      geometry: { type: "Polygon" as const, coordinates: [hexagonBoundary(h3Index)] },
+    }));
 
     const map = new MapLibreMap({
       container: containerRef.current,
@@ -58,34 +63,28 @@ export default function ActivityMap({ polyline }: { polyline: string }) {
         paint: { "line-color": "#fc4c02", "line-width": 3 },
       });
 
-      if (hullRing) {
-        map.addSource("route-hull", {
-          type: "geojson",
-          data: {
-            type: "Feature",
-            properties: {},
-            geometry: { type: "Polygon", coordinates: [hullRing] },
-          },
-        });
-        map.addLayer(
-          {
-            id: "route-hull-fill",
-            type: "fill",
-            source: "route-hull",
-            paint: { "fill-color": "#35603f", "fill-opacity": 0.18 },
-          },
-          "route-line"
-        );
-        map.addLayer(
-          {
-            id: "route-hull-outline",
-            type: "line",
-            source: "route-hull",
-            paint: { "line-color": "#2c4f34", "line-width": 1.5, "line-opacity": 0.7 },
-          },
-          "route-line"
-        );
-      }
+      map.addSource("hexagons", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: hexFeatures },
+      });
+      map.addLayer(
+        {
+          id: "hexagons-fill",
+          type: "fill",
+          source: "hexagons",
+          paint: { "fill-color": "#35603f", "fill-opacity": 0.18 },
+        },
+        "route-line"
+      );
+      map.addLayer(
+        {
+          id: "hexagons-outline",
+          type: "line",
+          source: "hexagons",
+          paint: { "line-color": "#2c4f34", "line-width": 1, "line-opacity": 0.5 },
+        },
+        "route-line"
+      );
     });
 
     return () => {
