@@ -5,6 +5,7 @@ export type Activity = {
   name: string;
   distance: number;
   moving_time: number;
+  total_elevation_gain: number;
   type: string;
   start_date_local: string;
   map?: {

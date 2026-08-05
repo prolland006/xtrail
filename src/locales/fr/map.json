@@ -1,4 +1,4 @@
 {
   "header": "Carte",
-  "noRoute": "Aucun tracé disponible pour cette sortie."
+  "empty": "Aucun territoire à afficher pour le moment."
 }

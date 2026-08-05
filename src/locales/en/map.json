@@ -1,4 +1,4 @@
 {
   "header": "Map",
-  "noRoute": "No route available for this activity."
+  "empty": "No territory to display yet."
 }

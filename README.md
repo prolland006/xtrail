@@ -20,53 +20,67 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/basic-features/font-optimization) to automatically optimize and load Inter, a custom Google Font.
 
-## Base de données (PostgreSQL + PostGIS)
+## Database (PostgreSQL + PostGIS)
 
-### Prérequis
+### Prerequisites
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installé et démarré
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running
 
 ### Configuration
 
-Copier le fichier d'exemple, puis ajuster les valeurs si besoin :
+Copy the example file, then adjust the values if needed:
 
 ```bash
 cp .env.example .env
 ```
 
-### Démarrer la base
+### Start the database
 
 ```bash
 docker compose up -d
 ```
 
-### Arrêter la base
+### Stop the database
 
 ```bash
-docker compose down       # arrête le conteneur, conserve les données
-docker compose down -v    # arrête le conteneur ET supprime les données (volume)
+docker compose down       # stops the container, keeps the data
+docker compose down -v    # stops the container AND deletes the data (volume)
 ```
 
-### Se connecter à PostgreSQL
+### Connect to PostgreSQL
 
 ```bash
 docker compose exec db psql -U xtrail -d xtrail
 ```
 
-(remplacer `xtrail` par tes valeurs de `POSTGRES_USER` / `POSTGRES_DB` si tu les as changées dans `.env`)
+(replace `xtrail` with your `POSTGRES_USER` / `POSTGRES_DB` values if you changed them in `.env`)
 
 ### Architecture
 
-- `docker-compose.yml` définit un service `db` basé sur l'image officielle `postgis/postgis:17-3.5` (PostgreSQL 17 + PostGIS 3.5, extension activée automatiquement au premier démarrage de la base).
-- Les données sont stockées dans un volume Docker **nommé** (`xtrail_postgres_data`), indépendant du cycle de vie du conteneur : `docker compose down` (sans `-v`) ne les supprime jamais, et rien n'est écrit dans le dépôt.
-- La configuration (nom de base, utilisateur, mot de passe, port) vit dans `.env` à la racine du projet — jamais commité, voir `.env.example` pour le modèle. `docker-compose.yml` et Next.js lisent tous les deux ce même fichier.
-- `DATABASE_URL` y est déjà au format attendu par [Prisma](https://www.prisma.io/) ; l'initialisation de Prisma (`npx prisma init`, schéma, migrations) reste une étape à venir — aucune table métier n'existe encore, seule l'infrastructure PostgreSQL/PostGIS est en place.
+- `docker-compose.yml` defines a `db` service based on the official `postgis/postgis:17-3.5` image (PostgreSQL 17 + PostGIS 3.5, extension enabled automatically on the database's first startup).
+- Data is stored in a **named** Docker volume (`xtrail_postgres_data`), independent of the container's lifecycle: `docker compose down` (without `-v`) never deletes it, and nothing is written to the repo.
+- Configuration (database name, user, password, port) lives in `.env` at the project root — never committed, see `.env.example` for the template. Both `docker-compose.yml` and Next.js read this same file.
+- `DATABASE_URL` is already in the format expected by [Prisma](https://www.prisma.io/), which reads that same `.env`.
 
-## Check docker DB
+### Prisma
 
+The schema (`prisma/schema.prisma`) and migrations (`prisma/migrations/`) are versioned in the repo.
+
+```bash
+npx prisma migrate dev    # applies migrations to your local database (creates them if needed)
+npx prisma studio         # web UI for browsing the data
+npx prisma generate       # regenerates the Prisma client (done automatically by migrate dev)
+```
+
+Models: `Player`, `StravaAccount`, `Activity`, `ActivityHexagon`, `Territory` — see the comments in `schema.prisma` for what each table is for.
+
+### Checking the database directly
+
+```bash
 docker exec -it xtrail-db psql -U xtrail -d xtrail
 SELECT current_database();
 SELECT PostGIS_Version();
+```
 
 ## Learn More
 

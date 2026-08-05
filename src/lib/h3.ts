@@ -51,18 +51,31 @@ function densify(coords: [number, number][], maxStepMeters: number): [number, nu
   return out;
 }
 
-// Coords are [lng, lat] pairs (GeoJSON/MapLibre order). Returns the set of H3 cell indexes the
-// route passes through at the given resolution.
-export function hexagonsForRoute(coords: [number, number][], resolution: number): string[] {
+export type HexagonVisit = { h3Index: string; distanceMeters: number };
+
+// Coords are [lng, lat] pairs (GeoJSON/MapLibre order). Returns every H3 cell the route
+// passes through at the given resolution, with the distance covered inside each one —
+// each route segment's length is attributed to the cell its midpoint falls in.
+export function hexagonsForRoute(coords: [number, number][], resolution: number): HexagonVisit[] {
   const edgeMeters = getHexagonEdgeLengthAvg(resolution, "m");
   const densified = densify(coords, edgeMeters);
-  const cells = new Set<string>();
+  const distanceByCell = new Map<string, number>();
 
-  for (const [lng, lat] of densified) {
-    cells.add(latLngToCell(lat, lng, resolution));
+  for (let i = 0; i < densified.length - 1; i++) {
+    const a = densified[i];
+    const b = densified[i + 1];
+    const midpoint: [number, number] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    const cell = latLngToCell(midpoint[1], midpoint[0], resolution);
+    distanceByCell.set(cell, (distanceByCell.get(cell) ?? 0) + haversineMeters(a, b));
   }
 
-  return Array.from(cells);
+  // A route with a single point has no segments — still record presence in its cell.
+  if (densified.length === 1) {
+    const [lng, lat] = densified[0];
+    distanceByCell.set(latLngToCell(lat, lng, resolution), 0);
+  }
+
+  return Array.from(distanceByCell, ([h3Index, distanceMeters]) => ({ h3Index, distanceMeters }));
 }
 
 // Returns a closed ring of [lng, lat] pairs suitable for a GeoJSON Polygon.

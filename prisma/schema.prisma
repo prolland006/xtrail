@@ -1,0 +1,132 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Player {
+  id        Int      @id @default(autoincrement())
+  firstName String   @map("first_name")
+  lastName  String   @map("last_name")
+  email     String   @unique
+  photoUrl  String   @map("photo_url")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  stravaAccount    StravaAccount?
+  activities       Activity[]
+  hexagonVisits    ActivityHexagon[]
+  ownedTerritories Territory[]
+
+  @@map("players")
+}
+
+// Separate from Player: OAuth tokens have a different lifecycle (revoked/reconnected)
+// than the player's profile, and this keeps Player free of Strava-specific concerns.
+model StravaAccount {
+  id              Int      @id @default(autoincrement())
+  playerId        Int      @unique @map("player_id")
+  stravaAthleteId BigInt   @unique @map("strava_athlete_id")
+  accessToken     String   @map("access_token")
+  refreshToken    String   @map("refresh_token")
+  expiresAt       DateTime @map("expires_at")
+  scope           String?
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@map("strava_accounts")
+}
+
+model Activity {
+  id       Int    @id @default(autoincrement())
+  // BigInt: Strava activity IDs already exceed Postgres's 32-bit Int range.
+  stravaId BigInt @unique @map("strava_id")
+  playerId Int    @map("player_id")
+
+  name      String
+  type      String
+  startDate DateTime @map("start_date")
+
+  distanceMeters      Float @map("distance_meters")
+  movingTimeSeconds   Int   @map("moving_time_seconds")
+  elevationGainMeters Float @map("elevation_gain_meters")
+
+  // Strava's encoded polyline, stored as-is. The H3 hex computation happens app-side
+  // (h3-js) from the decoded points, so no PostGIS geometry column is needed today —
+  // see the schema notes for the upgrade path if SQL-level spatial queries are needed later.
+  polyline String?
+
+  importedAt DateTime @default(now()) @map("imported_at")
+
+  player   Player            @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  hexagons ActivityHexagon[]
+
+  // Supports "this player's activities, most recent first" — the main read pattern.
+  @@index([playerId, startDate])
+  @@map("activities")
+}
+
+// One row per (activity, hexagon) the activity's route passes through — the fact table
+// that makes territory ownership computable and incrementally updatable. `playerId` is
+// denormalized from `activity.playerId` so the territory-recompute query (below) never
+// needs to join through Activity.
+model ActivityHexagon {
+  activityId Int    @map("activity_id")
+  playerId   Int    @map("player_id")
+  h3Index    String @map("h3_index") @db.VarChar(20)
+
+  // Distance covered by this activity specifically within this hexagon. Not used by the
+  // default "most visits wins" ownership rule, but kept so ownership can later be
+  // recomputed by distance instead of visit count without a schema change.
+  distanceMeters Float @map("distance_meters")
+
+  // Time spent inside this hexagon. Always null for now: Strava's summary polyline (what
+  // we currently import) has no per-point timestamps to derive this from. Populating it
+  // would require switching to Strava's detailed activity streams (time + latlng streams).
+  durationSeconds Float? @map("duration_seconds")
+
+  // Used only to break ties in territory ownership (see updateTerritoriesForHexagons):
+  // among players with an equal visit count on a hexagon, the one whose most recent
+  // visit is newest wins. Deliberately the only audit field on this table — everything
+  // else about "when" is available via the related Activity.startDate.
+  createdAt DateTime @default(now()) @map("created_at")
+
+  activity Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  player   Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  // Natural key: an activity visits a given hexagon at most once (enforces "seuls les
+  // hexagones concernés" idempotently on re-import) and doubles as the index for
+  // per-activity lookups (e.g. deleting/re-importing one activity's hex rows).
+  @@id([activityId, h3Index])
+  // The hot-path query: "for this hexagon, how many visits does each player have" —
+  // an index-only scan, no join to Activity required.
+  @@index([h3Index, playerId])
+  @@map("activity_hexagons")
+}
+
+// Materialized "who currently owns this hexagon" — recomputed only for the hexagons
+// touched by a newly imported activity. The map reads only this table, never the
+// full ActivityHexagon history.
+model Territory {
+  h3Index String @id @map("h3_index") @db.VarChar(20)
+
+  ownerId       Int?  @map("owner_id")
+  // The winning player's presence score at last recompute (visit count by default —
+  // see StravaAccount/Activity notes on switching to distance-weighted later).
+  ownerPresence Float @map("owner_presence")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // SetNull rather than Cascade: deleting a player shouldn't delete the hexagon's
+  // ownership record, just leave it unowned until the next recompute touches it again.
+  owner Player? @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+
+  @@index([ownerId])
+  @@map("territories")
+}

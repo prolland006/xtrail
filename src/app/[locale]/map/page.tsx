@@ -1,9 +1,9 @@
 import Menu from "@/components/Menu";
 import initTranslations from "@/app/i18n";
 import TranslationsProvider from "@/components/TranslationsProvider";
-import { getValidAccessToken, getLatestActivity } from "@/lib/strava";
+import { getTerritories } from "@/services/territory";
 import { Box, Container, Typography } from "@mui/material";
-import ActivityMap from "@/components/ActivityMap";
+import TerritoryMap from "@/components/TerritoryMap";
 
 const i18nNamespaces = ["map"];
 
@@ -14,9 +14,9 @@ async function MapPage({
 }) {
   const { t } = await initTranslations(locale, i18nNamespaces);
 
-  const token = await getValidAccessToken();
-  const activity = token ? await getLatestActivity(token) : null;
-  const polyline = activity?.map?.summary_polyline;
+  // The map's only data source: persisted territories, never a live recalculation from
+  // activities or GPS tracks — see services/territory.ts.
+  const territories = await getTerritories();
 
   return (
     <TranslationsProvider namespaces={i18nNamespaces} locale={locale}>
@@ -26,13 +26,10 @@ async function MapPage({
           <Typography variant="h4" fontWeight={700} letterSpacing="-0.01em" gutterBottom>
             {t("header")}
           </Typography>
-          {activity && (
-            <Typography color="text.secondary">{activity.name}</Typography>
-          )}
         </Container>
 
         <Container maxWidth="md" sx={{ pb: 6 }}>
-          {!polyline ? (
+          {territories.length === 0 ? (
             <Box
               sx={{
                 p: 4,
@@ -42,11 +39,11 @@ async function MapPage({
                 borderColor: "divider",
               }}
             >
-              <Typography color="text.secondary">{t("noRoute")}</Typography>
+              <Typography color="text.secondary">{t("empty")}</Typography>
             </Box>
           ) : (
             <Box sx={{ height: 520, borderRadius: 3.5, overflow: "hidden", boxShadow: 1 }}>
-              <ActivityMap polyline={polyline} />
+              <TerritoryMap territories={territories} />
             </Box>
           )}
         </Container>
