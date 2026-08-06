@@ -2,11 +2,33 @@
 
 import { useEffect, useRef } from "react";
 import { Map as MapLibreMap, LngLatBounds, NavigationControl, setWorkerUrl } from "maplibre-gl";
+import type { StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { TerritoryFillFeature, TerritoryBorderFeature } from "@/lib/h3";
 
-// Free, no-account vector tiles (OpenFreeMap) — no API key required.
-const MAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
+// OpenTopoMap: free, no-account hiking/topo raster tiles (contours, trails, relief shading).
+// Their usage policy (https://opentopomap.org/about#verwendung) allows light traffic without
+// a key but asks heavy users to self-host — fine for this app's current scale, revisit if
+// map traffic grows. Max zoom 17 is the topo data's actual resolution; MapLibre upscales past
+// that rather than requesting tiles the server doesn't have.
+const MAP_STYLE: StyleSpecification = {
+  version: 8,
+  sources: {
+    opentopomap: {
+      type: "raster",
+      tiles: [
+        "https://a.tile.opentopomap.org/{z}/{x}/{y}.png",
+        "https://b.tile.opentopomap.org/{z}/{x}/{y}.png",
+        "https://c.tile.opentopomap.org/{z}/{x}/{y}.png",
+      ],
+      tileSize: 256,
+      maxzoom: 17,
+      attribution:
+        'Map data: © OpenStreetMap contributors, SRTM | Map style: © OpenTopoMap (CC-BY-SA)',
+    },
+  },
+  layers: [{ id: "opentopomap", type: "raster", source: "opentopomap" }],
+};
 
 // MapLibre resolves its worker script relative to import.meta.url, which Next.js's webpack
 // bundling doesn't rewrite correctly — the worker request ends up hitting a page route instead
