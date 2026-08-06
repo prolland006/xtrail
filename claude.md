@@ -179,6 +179,22 @@ When proposing a solution:
 
 The goal is to build a maintainable application, not just make the current task work.
 
+# Communication Rules
+
+## Language
+
+The project documentation, source code, comments, commit messages, identifiers and technical documentation should remain in English unless explicitly requested otherwise.
+
+However, when communicating with me:
+
+- Always answer in French.
+- Explain technical concepts in French.
+- Explain architectural decisions in French.
+- Keep code, APIs, database schemas, identifiers and file names in English.
+- Keep comments in source code in English unless I explicitly request French comments.
+
+If I write prompts in English, treat them as implementation instructions only and continue responding to me in French.
+
 ## Map Architecture Rules
 
 The map components are only responsible for visualization.
