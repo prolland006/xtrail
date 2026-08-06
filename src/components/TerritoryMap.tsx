@@ -1,17 +1,20 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Map as MapLibreMap, LngLatBounds, NavigationControl, setWorkerUrl } from "maplibre-gl";
 import type { StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { TerritoryFillFeature, TerritoryBorderFeature } from "@/lib/h3";
+import { IconButton, Menu, MenuItem, ListItemIcon, ListItemText } from "@mui/material";
+import MapIcon from "@mui/icons-material/Map";
+import CheckIcon from "@mui/icons-material/Check";
 
 // OpenTopoMap: free, no-account hiking/topo raster tiles (contours, trails, relief shading).
 // Their usage policy (https://opentopomap.org/about#verwendung) allows light traffic without
 // a key but asks heavy users to self-host — fine for this app's current scale, revisit if
 // map traffic grows. Max zoom 17 is the topo data's actual resolution; MapLibre upscales past
 // that rather than requesting tiles the server doesn't have.
-const MAP_STYLE: StyleSpecification = {
+const OPENTOPOMAP_STYLE: StyleSpecification = {
   version: 8,
   sources: {
     opentopomap: {
@@ -29,6 +32,15 @@ const MAP_STYLE: StyleSpecification = {
   },
   layers: [{ id: "opentopomap", type: "raster", source: "opentopomap" }],
 };
+
+// OpenFreeMap: free, no-account, no-limit vector tiles (https://openfreemap.org) — no API key,
+// commercial use explicitly allowed.
+type BaseStyleOption = { id: string; label: string; style: StyleSpecification | string };
+const BASE_STYLES: BaseStyleOption[] = [
+  { id: "topo", label: "Randonnée", style: OPENTOPOMAP_STYLE },
+  { id: "positron", label: "Clair", style: "https://tiles.openfreemap.org/styles/positron" },
+  { id: "liberty", label: "Coloré", style: "https://tiles.openfreemap.org/styles/liberty" },
+];
 
 // MapLibre resolves its worker script relative to import.meta.url, which Next.js's webpack
 // bundling doesn't rewrite correctly — the worker request ends up hitting a page route instead
@@ -49,7 +61,8 @@ function colorForOwner(ownerId: number): string {
  * built from the persisted Territory table — see services/territory.ts). This component never
  * decodes a polyline, computes an H3 cell, or works out which hexagon edges are frontiers —
  * it only turns known GeoJSON into map layers and assigns display color, per the map
- * architecture rules (React components must never calculate H3 indexes).
+ * architecture rules (React components must never calculate H3 indexes). Choosing among base
+ * map styles is a display-only concern and stays here too.
  */
 export default function TerritoryMap({
   fillFeatures,
@@ -59,6 +72,17 @@ export default function TerritoryMap({
   borderFeatures: TerritoryBorderFeature[];
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<MapLibreMap | null>(null);
+  // Latest colored fill / border features, read by the style.load handler below — a ref
+  // rather than a closure variable so switching base styles (which re-fires style.load)
+  // re-adds the layers without needing to recreate the whole map instance.
+  const territoryDataRef = useRef<{
+    fill: (TerritoryFillFeature & { properties: { color: string } })[];
+    borders: TerritoryBorderFeature[];
+  }>({ fill: [], borders: [] });
+
+  const [styleId, setStyleId] = useState(BASE_STYLES[0].id);
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!containerRef.current || fillFeatures.length === 0) return;
@@ -69,6 +93,7 @@ export default function TerritoryMap({
       ...feature,
       properties: { ...feature.properties, color: colorForOwner(feature.properties.ownerId) },
     }));
+    territoryDataRef.current = { fill: coloredFillFeatures, borders: borderFeatures };
 
     const firstPoint = coloredFillFeatures[0].geometry.coordinates[0][0];
     const bounds = coloredFillFeatures.reduce((acc, feature) => {
@@ -78,17 +103,23 @@ export default function TerritoryMap({
 
     const map = new MapLibreMap({
       container: containerRef.current,
-      style: MAP_STYLE,
+      style: BASE_STYLES.find((s) => s.id === styleId)!.style,
       bounds,
       fitBoundsOptions: { padding: 48 },
     });
+    mapRef.current = map;
 
     map.addControl(new NavigationControl(), "top-right");
 
-    map.on("load", () => {
+    // Fires after the initial style loads, and again every time setStyle() swaps the base
+    // map — MapLibre drops runtime-added sources/layers on a style swap, so they need to be
+    // re-added each time rather than only once on "load".
+    map.on("style.load", () => {
+      const { fill, borders } = territoryDataRef.current;
+
       map.addSource("territories-fill", {
         type: "geojson",
-        data: { type: "FeatureCollection", features: coloredFillFeatures },
+        data: { type: "FeatureCollection", features: fill },
       });
       map.addLayer({
         id: "territories-fill",
@@ -107,7 +138,7 @@ export default function TerritoryMap({
       // misleading.
       map.addSource("territories-borders", {
         type: "geojson",
-        data: { type: "FeatureCollection", features: borderFeatures },
+        data: { type: "FeatureCollection", features: borders },
       });
       map.addLayer({
         id: "territories-borders",
@@ -118,9 +149,50 @@ export default function TerritoryMap({
     });
 
     return () => {
+      mapRef.current = null;
       map.remove();
     };
+    // styleId intentionally excluded: it only seeds the initial style. Switching styles later
+    // goes through mapRef.current.setStyle() in the menu's onClick instead of re-running this
+    // effect, so the map instance (camera position, etc.) survives a base-style change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fillFeatures, borderFeatures]);
 
-  return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;
+  return (
+    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
+
+      <IconButton
+        onClick={(e) => setMenuAnchor(e.currentTarget)}
+        aria-label="Changer de fond de carte"
+        sx={{
+          position: "absolute",
+          bottom: 16,
+          left: 16,
+          bgcolor: "background.paper",
+          boxShadow: 2,
+          "&:hover": { bgcolor: "background.paper" },
+        }}
+      >
+        <MapIcon />
+      </IconButton>
+
+      <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={() => setMenuAnchor(null)}>
+        {BASE_STYLES.map((option) => (
+          <MenuItem
+            key={option.id}
+            selected={option.id === styleId}
+            onClick={() => {
+              setStyleId(option.id);
+              mapRef.current?.setStyle(option.style);
+              setMenuAnchor(null);
+            }}
+          >
+            <ListItemIcon>{option.id === styleId ? <CheckIcon fontSize="small" /> : null}</ListItemIcon>
+            <ListItemText>{option.label}</ListItemText>
+          </MenuItem>
+        ))}
+      </Menu>
+    </div>
+  );
 }
