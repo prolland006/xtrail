@@ -1,4 +1,11 @@
-import { latLngToCell, cellToBoundary, getHexagonEdgeLengthAvg } from "h3-js";
+import {
+  latLngToCell,
+  cellToBoundary,
+  getHexagonEdgeLengthAvg,
+  originToDirectedEdges,
+  getDirectedEdgeDestination,
+  directedEdgeToBoundary,
+} from "h3-js";
 
 // H3 only ships a fixed set of resolutions (0-15), each with its own average hexagon size —
 // there's no continuous "give me exactly N meters" API. This picks the resolution whose
@@ -85,4 +92,66 @@ export function hexagonBoundary(h3Index: string): [number, number][] {
   const last = boundary[boundary.length - 1];
   const alreadyClosed = first[0] === last[0] && first[1] === last[1];
   return alreadyClosed ? boundary : [...boundary, first];
+}
+
+// Duck-typed rather than importing TerritoryView from services/territory: keeps this module
+// (pure H3 geometry, no I/O) independent of the service layer, while TerritoryView already
+// satisfies this shape structurally.
+export type OwnedHexagon = { h3Index: string; ownerId: number; owner: { firstName: string; lastName: string } };
+
+export type TerritoryFillFeature = {
+  type: "Feature";
+  properties: { ownerId: number; ownerName: string };
+  geometry: { type: "Polygon"; coordinates: [number, number][][] };
+};
+
+// One filled polygon per owned hexagon — map components read the coordinates straight off
+// this, no H3 computation left for the client to do (see the map architecture rules).
+export function territoryFillFeatures(territories: OwnedHexagon[]): TerritoryFillFeature[] {
+  return territories.map((t) => ({
+    type: "Feature",
+    properties: { ownerId: t.ownerId, ownerName: `${t.owner.firstName} ${t.owner.lastName}` },
+    geometry: { type: "Polygon", coordinates: [hexagonBoundary(t.h3Index)] },
+  }));
+}
+
+export type TerritoryBorderFeature = {
+  type: "Feature";
+  properties: Record<string, never>;
+  geometry: { type: "LineString"; coordinates: [number, number][] };
+};
+
+/**
+ * "Frontiers only" outline: a hexagon edge is emitted only when it separates two different
+ * owners, or an owner from unclaimed ground — never between two same-owner neighbors. Uses
+ * h3-js's own directed-edge API (originToDirectedEdges / getDirectedEdgeDestination /
+ * directedEdgeToBoundary) rather than a hand-rolled adjacency or polygon-dissolve algorithm:
+ * it already knows, for a given cell, the exact neighbor and shared boundary geometry for
+ * each of its edges, pentagons included.
+ *
+ * Each physical edge is emitted exactly once even though both neighboring owned hexagons
+ * "see" it (via the neighbor < h3Index tie-break below) — otherwise a boundary between two
+ * different owners would be drawn twice, once from each side.
+ */
+export function territoryBorderFeatures(territories: OwnedHexagon[]): TerritoryBorderFeature[] {
+  const ownerByHex = new Map(territories.map((t) => [t.h3Index, t.ownerId]));
+  const features: TerritoryBorderFeature[] = [];
+
+  for (const t of territories) {
+    for (const edge of originToDirectedEdges(t.h3Index)) {
+      const neighbor = getDirectedEdgeDestination(edge);
+      const neighborOwner = ownerByHex.get(neighbor);
+
+      if (neighborOwner === t.ownerId) continue; // same owner both sides: no frontier here
+      if (neighborOwner !== undefined && neighbor < t.h3Index) continue; // the other side already emitted this edge
+
+      features.push({
+        type: "Feature",
+        properties: {},
+        geometry: { type: "LineString", coordinates: directedEdgeToBoundary(edge, true) as [number, number][] },
+      });
+    }
+  }
+
+  return features;
 }

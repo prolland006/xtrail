@@ -3,8 +3,7 @@
 import { useEffect, useRef } from "react";
 import { Map as MapLibreMap, LngLatBounds, NavigationControl, setWorkerUrl } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { hexagonBoundary } from "@/lib/h3";
-import type { TerritoryView } from "@/services/territory";
+import type { TerritoryFillFeature, TerritoryBorderFeature } from "@/lib/h3";
 
 // Free, no-account vector tiles (OpenFreeMap) — no API key required.
 const MAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
@@ -22,29 +21,35 @@ function colorForOwner(ownerId: number): string {
   return `hsl(${hue}, 65%, 45%)`;
 }
 
-// Pure rendering: every hexagon's shape and owner already come from the Territory table
-// (see services/territory.ts) — this component never decodes a polyline or computes an H3
-// cell from GPS data, it only turns known hexagon indexes into map geometry.
-export default function TerritoryMap({ territories }: { territories: TerritoryView[] }) {
+/**
+ * Pure rendering: both the fill polygons and the frontier-only border lines already come
+ * fully formed from the server (see lib/h3.ts#territoryFillFeatures / territoryBorderFeatures,
+ * built from the persisted Territory table — see services/territory.ts). This component never
+ * decodes a polyline, computes an H3 cell, or works out which hexagon edges are frontiers —
+ * it only turns known GeoJSON into map layers and assigns display color, per the map
+ * architecture rules (React components must never calculate H3 indexes).
+ */
+export default function TerritoryMap({
+  fillFeatures,
+  borderFeatures,
+}: {
+  fillFeatures: TerritoryFillFeature[];
+  borderFeatures: TerritoryBorderFeature[];
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!containerRef.current || territories.length === 0) return;
+    if (!containerRef.current || fillFeatures.length === 0) return;
 
-    const features = territories.map((territory) => ({
-      type: "Feature" as const,
-      properties: {
-        color: colorForOwner(territory.ownerId),
-        ownerName: `${territory.owner.firstName} ${territory.owner.lastName}`,
-      },
-      geometry: {
-        type: "Polygon" as const,
-        coordinates: [hexagonBoundary(territory.h3Index)],
-      },
+    // Color is a display-only concern (not territory logic), so it's assigned here rather
+    // than repeated in the server payload for every one of thousands of same-owner hexagons.
+    const coloredFillFeatures = fillFeatures.map((feature) => ({
+      ...feature,
+      properties: { ...feature.properties, color: colorForOwner(feature.properties.ownerId) },
     }));
 
-    const firstPoint = features[0].geometry.coordinates[0][0];
-    const bounds = features.reduce((acc, feature) => {
+    const firstPoint = coloredFillFeatures[0].geometry.coordinates[0][0];
+    const bounds = coloredFillFeatures.reduce((acc, feature) => {
       for (const coord of feature.geometry.coordinates[0]) acc.extend(coord);
       return acc;
     }, new LngLatBounds(firstPoint, firstPoint));
@@ -59,28 +64,41 @@ export default function TerritoryMap({ territories }: { territories: TerritoryVi
     map.addControl(new NavigationControl(), "top-right");
 
     map.on("load", () => {
-      map.addSource("territories", {
+      map.addSource("territories-fill", {
         type: "geojson",
-        data: { type: "FeatureCollection", features },
+        data: { type: "FeatureCollection", features: coloredFillFeatures },
       });
       map.addLayer({
         id: "territories-fill",
         type: "fill",
-        source: "territories",
-        paint: { "fill-color": ["get", "color"], "fill-opacity": 0.35 },
+        source: "territories-fill",
+        // fill-outline-color defaults to fill-color when unset, which would draw a visible
+        // edge on every single hexagon (not just territory frontiers) — set to transparent so
+        // the only borders on the map come from the dedicated frontier layer below.
+        paint: { "fill-color": ["get", "color"], "fill-opacity": 0.09, "fill-outline-color": "transparent" },
+      });
+
+      // Only actual frontier edges reach this source (different owners, or an owner against
+      // unclaimed ground) — see territoryBorderFeatures — so this draws territory outlines
+      // rather than a full hexagon grid. One neutral style for every frontier: which side
+      // "owns" a shared edge is arbitrary, so tying border color to an owner would be
+      // misleading.
+      map.addSource("territories-borders", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: borderFeatures },
       });
       map.addLayer({
-        id: "territories-outline",
+        id: "territories-borders",
         type: "line",
-        source: "territories",
-        paint: { "line-color": ["get", "color"], "line-width": 1, "line-opacity": 0.8 },
+        source: "territories-borders",
+        paint: { "line-color": "#1f2937", "line-width": 1, "line-opacity": 0.35 },
       });
     });
 
     return () => {
       map.remove();
     };
-  }, [territories]);
+  }, [fillFeatures, borderFeatures]);
 
   return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;
 }

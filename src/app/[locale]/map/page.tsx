@@ -2,6 +2,7 @@ import Menu from "@/components/Menu";
 import initTranslations from "@/app/i18n";
 import TranslationsProvider from "@/components/TranslationsProvider";
 import { getTerritories } from "@/services/territory";
+import { territoryFillFeatures, territoryBorderFeatures } from "@/lib/h3";
 import { Box, Container, Typography } from "@mui/material";
 import TerritoryMap from "@/components/TerritoryMap";
 
@@ -43,7 +44,10 @@ async function MapPage({
             </Box>
           ) : (
             <Box sx={{ height: 520, borderRadius: 3.5, overflow: "hidden", boxShadow: 1 }}>
-              <TerritoryMap territories={territories} />
+              <TerritoryMap
+                fillFeatures={territoryFillFeatures(territories)}
+                borderFeatures={territoryBorderFeatures(territories)}
+              />
             </Box>
           )}
         </Container>
