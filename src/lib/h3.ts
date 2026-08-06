@@ -97,11 +97,20 @@ export function hexagonBoundary(h3Index: string): [number, number][] {
 // Duck-typed rather than importing TerritoryView from services/territory: keeps this module
 // (pure H3 geometry, no I/O) independent of the service layer, while TerritoryView already
 // satisfies this shape structurally.
-export type OwnedHexagon = { h3Index: string; ownerId: number; owner: { firstName: string; lastName: string } };
+export type OwnedHexagon = {
+  h3Index: string;
+  ownerId: number;
+  ownerPresence: number;
+  owner: { firstName: string; lastName: string };
+};
 
 export type TerritoryFillFeature = {
   type: "Feature";
-  properties: { ownerId: number; ownerName: string };
+  // h3Index is carried in properties (not just used to build the geometry) so the map layer
+  // can promoteId it for MapLibre feature-state — that's what powers hover/selection
+  // highlighting without a client-side H3 lookup. ownerPresence is passed through as-is for
+  // the ownership popup; still no computation happening here, only relabeling server data.
+  properties: { h3Index: string; ownerId: number; ownerName: string; ownerPresence: number };
   geometry: { type: "Polygon"; coordinates: [number, number][][] };
 };
 
@@ -110,7 +119,12 @@ export type TerritoryFillFeature = {
 export function territoryFillFeatures(territories: OwnedHexagon[]): TerritoryFillFeature[] {
   return territories.map((t) => ({
     type: "Feature",
-    properties: { ownerId: t.ownerId, ownerName: `${t.owner.firstName} ${t.owner.lastName}` },
+    properties: {
+      h3Index: t.h3Index,
+      ownerId: t.ownerId,
+      ownerName: `${t.owner.firstName} ${t.owner.lastName}`,
+      ownerPresence: t.ownerPresence,
+    },
     geometry: { type: "Polygon", coordinates: [hexagonBoundary(t.h3Index)] },
   }));
 }
