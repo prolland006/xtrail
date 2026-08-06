@@ -21,36 +21,32 @@ async function MapPage({
 
   return (
     <TranslationsProvider namespaces={i18nNamespaces} locale={locale}>
-      <Menu />
-      <Box sx={{ bgcolor: "background.default", minHeight: "100vh" }}>
-        <Container maxWidth="md" sx={{ pt: 5, pb: 3 }}>
-          <Typography variant="h4" fontWeight={700} letterSpacing="-0.01em" gutterBottom>
-            {t("header")}
-          </Typography>
-        </Container>
-
-        <Container maxWidth="md" sx={{ pb: 6 }}>
+      <Box sx={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+        <Menu />
+        <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", bgcolor: "background.default" }}>
           {territories.length === 0 ? (
-            <Box
-              sx={{
-                p: 4,
-                borderRadius: 3.5,
-                bgcolor: "background.paper",
-                border: "1.5px dashed",
-                borderColor: "divider",
-              }}
-            >
-              <Typography color="text.secondary">{t("empty")}</Typography>
-            </Box>
+            <Container maxWidth="md" sx={{ pt: 3, pb: 6 }}>
+              <Box
+                sx={{
+                  p: 4,
+                  borderRadius: 3.5,
+                  bgcolor: "background.paper",
+                  border: "1.5px dashed",
+                  borderColor: "divider",
+                }}
+              >
+                <Typography color="text.secondary">{t("empty")}</Typography>
+              </Box>
+            </Container>
           ) : (
-            <Box sx={{ height: 520, borderRadius: 3.5, overflow: "hidden", boxShadow: 1 }}>
+            <Box sx={{ flex: 1, minHeight: 0 }}>
               <TerritoryMap
                 fillFeatures={territoryFillFeatures(territories)}
                 borderFeatures={territoryBorderFeatures(territories)}
               />
             </Box>
           )}
-        </Container>
+        </Box>
       </Box>
     </TranslationsProvider>
   );
