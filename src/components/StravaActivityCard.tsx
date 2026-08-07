@@ -1,46 +1,9 @@
 "use client";
 
 import { Activity } from "@/lib/strava";
-import { Box, Button, Card, CardContent, Chip, Stack, Typography } from "@mui/material";
-
-function formatPace(distanceMeters: number, movingTimeSeconds: number) {
-  if (!distanceMeters) return "—";
-  const secondsPerKm = movingTimeSeconds / (distanceMeters / 1000);
-  const minutes = Math.floor(secondsPerKm / 60);
-  const seconds = Math.round(secondsPerKm % 60);
-  return `${minutes}:${seconds.toString().padStart(2, "0")}/km`;
-}
-
-function formatDuration(seconds: number) {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.round((seconds % 3600) / 60);
-  return hours > 0 ? `${hours}h${minutes.toString().padStart(2, "0")}` : `${minutes} min`;
-}
-
-function Stat({ value, label }: { value: string; label: string }) {
-  return (
-    <Box>
-      <Typography
-        sx={{
-          fontFamily: 'ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, monospace',
-          fontVariantNumeric: "tabular-nums",
-          fontWeight: 700,
-          fontSize: 22,
-          letterSpacing: "-0.02em",
-        }}
-      >
-        {value}
-      </Typography>
-      <Typography
-        variant="caption"
-        color="text.secondary"
-        sx={{ textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}
-      >
-        {label}
-      </Typography>
-    </Box>
-  );
-}
+import { formatDuration, formatPace } from "@/lib/activityFormat";
+import { Button, Card, CardContent, Chip, Stack, Typography } from "@mui/material";
+import ActivityStat from "./ActivityStat";
 
 export default function StravaActivityCard({
   activity,
@@ -103,9 +66,9 @@ export default function StravaActivityCard({
         </Stack>
 
         <Stack direction="row" spacing={4}>
-          <Stat value={`${(activity.distance / 1000).toFixed(1)} km`} label="Distance" />
-          <Stat value={formatDuration(activity.moving_time)} label="Durée" />
-          <Stat value={formatPace(activity.distance, activity.moving_time)} label="Allure" />
+          <ActivityStat value={`${(activity.distance / 1000).toFixed(1)} km`} label="Distance" />
+          <ActivityStat value={formatDuration(activity.moving_time)} label="Durée" />
+          <ActivityStat value={formatPace(activity.distance, activity.moving_time)} label="Allure" />
         </Stack>
       </CardContent>
     </Card>
