@@ -7,6 +7,13 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// Every source of activities the app can import from. Strava is the only real one today;
+// adding Garmin/Coros/etc. later means adding a value here — no other model needs to change
+// shape to accommodate a new provider.
+enum ActivityProvider {
+  strava
+}
+
 model Player {
   id        Int      @id @default(autoincrement())
   firstName String   @map("first_name")
@@ -16,37 +23,54 @@ model Player {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  stravaAccount    StravaAccount?
-  activities       Activity[]
-  hexagonVisits    ActivityHexagon[]
-  ownedTerritories Territory[]
+  externalConnections ExternalConnection[]
+  activities          Activity[]
+  hexagonVisits       ActivityHexagon[]
+  ownedTerritories    Territory[]
 
   @@map("players")
 }
 
-// Separate from Player: OAuth tokens have a different lifecycle (revoked/reconnected)
-// than the player's profile, and this keeps Player free of Strava-specific concerns.
-model StravaAccount {
-  id              Int      @id @default(autoincrement())
-  playerId        Int      @unique @map("player_id")
-  stravaAthleteId BigInt   @unique @map("strava_athlete_id")
-  accessToken     String   @map("access_token")
-  refreshToken    String   @map("refresh_token")
-  expiresAt       DateTime @map("expires_at")
-  scope           String?
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+// One row per (player, provider): a player can connect Strava AND Garmin, but only once each.
+// Separate from Player since OAuth tokens have a different lifecycle (revoked/reconnected)
+// than the player's profile.
+model ExternalConnection {
+  id       Int              @id @default(autoincrement())
+  playerId Int              @map("player_id")
+  provider ActivityProvider
+
+  // The athlete/user id on the provider's own side (Strava's athlete id, Garmin's user id...).
+  // Kept as a string rather than typed per-provider (e.g. BigInt for Strava) since we can't
+  // assume every future provider's id is numeric.
+  externalAccountId String @map("external_account_id")
+
+  accessToken  String   @map("access_token")
+  refreshToken String   @map("refresh_token")
+  expiresAt    DateTime @map("expires_at")
+  scope        String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
-  @@map("strava_accounts")
+  // At most one connection per player per provider.
+  @@unique([playerId, provider], name: "playerProvider")
+  // How a webhook/worker turns "owner_id on provider X" back into one of our players.
+  @@unique([provider, externalAccountId], name: "providerAccount")
+  @@map("external_connections")
 }
 
 model Activity {
-  id       Int    @id @default(autoincrement())
-  // BigInt: Strava activity IDs already exceed Postgres's 32-bit Int range.
-  stravaId BigInt @unique @map("strava_id")
-  playerId Int    @map("player_id")
+  id Int @id @default(autoincrement())
+
+  // Which platform this came from, and its id there — together the natural key. Not typed
+  // per-provider (no more "stravaId") so importing from a second provider never requires a
+  // schema change here, only a new ActivityProvider value.
+  provider           ActivityProvider
+  providerActivityId String           @map("provider_activity_id")
+
+  playerId Int @map("player_id")
 
   name      String
   type      String
@@ -56,16 +80,23 @@ model Activity {
   movingTimeSeconds   Int   @map("moving_time_seconds")
   elevationGainMeters Float @map("elevation_gain_meters")
 
-  // Strava's encoded polyline, stored as-is. The H3 hex computation happens app-side
-  // (h3-js) from the decoded points, so no PostGIS geometry column is needed today —
-  // see the schema notes for the upgrade path if SQL-level spatial queries are needed later.
+  // Encoded polyline in the same format lib/polyline.ts decodes — the storage/rendering
+  // convention every provider adapter must produce, regardless of that provider's own native
+  // track format. No PostGIS geometry column needed today: H3 hex computation happens
+  // app-side (h3-js) from the decoded points — see the schema notes for the upgrade path if
+  // SQL-level spatial queries are needed later.
   polyline String?
 
   importedAt DateTime @default(now()) @map("imported_at")
+  // Set on creation and bumped whenever a provider "update" event (e.g. rename, sport type
+  // change) is applied to this row. Historical immutability means we still never recompute
+  // distance/elevation/hexagons on update — only the fields the provider itself reports changed.
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   player   Player            @relation(fields: [playerId], references: [id], onDelete: Cascade)
   hexagons ActivityHexagon[]
 
+  @@unique([provider, providerActivityId], name: "providerActivity")
   // Supports "this player's activities, most recent first" — the main read pattern.
   @@index([playerId, startDate])
   @@map("activities")
@@ -85,9 +116,9 @@ model ActivityHexagon {
   // recomputed by distance instead of visit count without a schema change.
   distanceMeters Float @map("distance_meters")
 
-  // Time spent inside this hexagon. Always null for now: Strava's summary polyline (what
-  // we currently import) has no per-point timestamps to derive this from. Populating it
-  // would require switching to Strava's detailed activity streams (time + latlng streams).
+  // Time spent inside this hexagon. Always null for now: a summary polyline (what we
+  // currently import) has no per-point timestamps to derive this from. Populating it would
+  // require switching to a provider's detailed activity streams (time + latlng streams).
   durationSeconds Float? @map("duration_seconds")
 
   // Used only to break ties in territory ownership (see updateTerritoriesForHexagons):
@@ -117,7 +148,7 @@ model Territory {
 
   ownerId       Int?  @map("owner_id")
   // The winning player's presence score at last recompute (visit count by default —
-  // see StravaAccount/Activity notes on switching to distance-weighted later).
+  // see Activity notes on switching to distance-weighted later).
   ownerPresence Float @map("owner_presence")
 
   createdAt DateTime @default(now()) @map("created_at")
@@ -129,4 +160,53 @@ model Territory {
 
   @@index([ownerId])
   @@map("territories")
+}
+
+enum ActivitySyncAspect {
+  create
+  update
+  delete
+}
+
+enum ActivitySyncJobStatus {
+  pending
+  processing
+  completed
+  failed
+}
+
+// Queue of provider webhook events awaiting processing by the worker. A webhook handler's
+// only DB write is inserting one row here (after checking the owner is a known player) — all
+// calls to a provider's API and H3/territory processing happen later, out of the request path.
+// Shared across providers: a future Garmin webhook enqueues into this same table and the same
+// worker, distinguished only by `provider`.
+model ActivitySyncJob {
+  id Int @id @default(autoincrement())
+
+  provider           ActivityProvider
+  providerActivityId String           @map("provider_activity_id")
+  // The provider's athlete/user id (webhook payload's owner). The worker re-resolves the
+  // ExternalConnection from this at process time rather than the job carrying a playerId, so
+  // an account disconnected between enqueue and processing is naturally handled.
+  externalAccountId String @map("external_account_id")
+
+  aspectType ActivitySyncAspect @map("event_type")
+  // The webhook payload's own event time (when the change happened on the provider's side,
+  // not when we received it). Combined with provider + providerActivityId + aspectType, this
+  // is what makes enqueueing idempotent: a redelivered event hits the unique constraint below
+  // instead of creating a second job.
+  eventTime DateTime @map("event_time")
+
+  status    ActivitySyncJobStatus @default(pending)
+  attempts  Int                   @default(0)
+  lastError String?               @map("last_error")
+
+  processedAt DateTime? @map("processed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@unique([provider, providerActivityId, aspectType, eventTime], name: "providerEvent")
+  // The worker's dequeue query: oldest pending jobs first.
+  @@index([status, createdAt])
+  @@map("activity_sync_jobs")
 }

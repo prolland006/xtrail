@@ -72,7 +72,7 @@ npx prisma studio         # web UI for browsing the data
 npx prisma generate       # regenerates the Prisma client (done automatically by migrate dev)
 ```
 
-Models: `Player`, `StravaAccount`, `Activity`, `ActivityHexagon`, `Territory` — see the comments in `schema.prisma` for what each table is for.
+Models: `Player`, `ExternalConnection`, `Activity`, `ActivityHexagon`, `Territory`, `ActivitySyncJob` — see the comments in `schema.prisma` for what each table is for.
 
 ### Checking the database directly
 

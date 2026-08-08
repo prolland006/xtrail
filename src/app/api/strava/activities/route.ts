@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
-import { getValidAccessToken } from "@/lib/strava";
+import { getValidAccessTokenForPlayer } from "@/lib/strava";
+import { getOrCreatePlayerForSession } from "@/lib/player";
 
 export async function GET() {
-  const token = await getValidAccessToken();
+  const player = await getOrCreatePlayerForSession();
+  if (!player) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+
+  const token = await getValidAccessTokenForPlayer(player.id);
   if (!token) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
   const res = await fetch("https://www.strava.com/api/v3/athlete/activities?per_page=1", {

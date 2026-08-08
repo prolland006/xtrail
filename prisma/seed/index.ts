@@ -9,7 +9,7 @@ import {
   RANDOM_SEED,
   MIN_ACTIVITIES_PER_PLAYER,
   MAX_ACTIVITIES_PER_PLAYER,
-  FAKE_STRAVA_ID_BASE,
+  FAKE_PROVIDER_ACTIVITY_ID_BASE,
   TERRITORY_RECOMPUTE_BATCH_SIZE,
 } from "./config";
 
@@ -42,7 +42,7 @@ async function main() {
 
   const resolution = resolutionForDiameterMeters(HEX_DIAMETER_METERS);
   const touchedHexagons = new Set<string>();
-  let stravaIdCounter = FAKE_STRAVA_ID_BASE;
+  let providerActivityIdCounter = FAKE_PROVIDER_ACTIVITY_ID_BASE;
   let activityCount = 0;
 
   console.log("Generating activities and H3 hexagons...");
@@ -52,7 +52,7 @@ async function main() {
     const activitiesForPlayer = randInt(rng, MIN_ACTIVITIES_PER_PLAYER, MAX_ACTIVITIES_PER_PLAYER);
 
     for (let j = 0; j < activitiesForPlayer; j++) {
-      const input = generateSeedActivity(rng, BigInt(stravaIdCounter++), profile);
+      const input = generateSeedActivity(rng, String(providerActivityIdCounter++), profile);
 
       const visits = hexagonsForRoute(
         input.route.points.map((p) => [p.lng, p.lat] as [number, number]),
@@ -62,7 +62,8 @@ async function main() {
       await prisma.$transaction(async (tx) => {
         const activity = await tx.activity.create({
           data: {
-            stravaId: input.stravaId,
+            provider: "strava",
+            providerActivityId: input.providerActivityId,
             playerId: player.id,
             name: input.name,
             type: input.type,

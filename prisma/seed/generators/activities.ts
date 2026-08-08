@@ -20,7 +20,7 @@ const ACTIVITY_TYPES = ["TrailRun", "TrailRun", "TrailRun", "Run"] as const;
 export type AthleteProfile = { paceMinPerKm: number; climbFactor: number };
 
 export type SeedActivityInput = {
-  stravaId: bigint;
+  providerActivityId: string;
   name: string;
   type: string;
   startDate: Date;
@@ -31,7 +31,7 @@ export type SeedActivityInput = {
   route: GeneratedRoute;
 };
 
-export function generateSeedActivity(rng: Rng, stravaId: bigint, athlete: AthleteProfile): SeedActivityInput {
+export function generateSeedActivity(rng: Rng, providerActivityId: string, athlete: AthleteProfile): SeedActivityInput {
   const trailhead = pick(rng, TRAILHEADS);
   const shape: RouteShape = rng() < 0.7 ? "loop" : "out-and-back";
   const isLongRun = rng() < 0.12;
@@ -46,7 +46,7 @@ export function generateSeedActivity(rng: Rng, stravaId: bigint, athlete: Athlet
   );
 
   return {
-    stravaId,
+    providerActivityId,
     name: `${pick(rng, ACTIVITY_NAME_TEMPLATES)} - ${trailhead.name}`,
     type: pick(rng, ACTIVITY_TYPES),
     startDate: randomPastDate(rng),
