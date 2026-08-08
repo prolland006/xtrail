@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Map as MapLibreMap, NavigationControl, Popup, setWorkerUrl } from "maplibre-gl";
 import type { FilterSpecification, GeoJSONSource, LngLat, MapGeoJSONFeature } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { Box, CircularProgress } from "@mui/material";
 import type { TerritoryFillFeature, TerritoryBorderFeature } from "@/lib/h3";
 import { DEFAULT_MAP_STYLE_ID, getMapStyle } from "@/map/mapStyles";
 import MapStyleSelector from "@/map/MapStyleSelector";
@@ -70,13 +71,85 @@ export default function TerritoryMap({ initialCenter }: { initialCenter: { lat: 
 
   const [truncated, setTruncated] = useState(false);
 
+  // Resolved once, before the map is ever created — either the visitor's real position or the
+  // server-computed fallback (initialCenter). Waiting for this rather than creating the map at
+  // initialCenter and flyTo-ing to the real position once it arrives avoids the map visibly
+  // starting at the wrong place and animating over: it now only ever appears once at its final
+  // position.
+  const [resolvedCenter, setResolvedCenter] = useState<{ lat: number; lng: number } | null>(null);
+
   useEffect(() => {
-    if (!containerRef.current) return;
+    let cancelled = false;
+
+    // --- TEMPORARY diagnostic logging (requested to investigate "map doesn't land exactly on
+    // my position") — remove once the real position/accuracy the browser returns is known.
+    console.log("[geo-debug] navigator.geolocation available:", "geolocation" in navigator);
+    if ("permissions" in navigator) {
+      navigator.permissions
+        .query({ name: "geolocation" })
+        .then((status) => {
+          console.log("[geo-debug] Permission API state (before prompt):", status.state);
+        })
+        .catch((err) => console.log("[geo-debug] Permission API query failed:", err));
+    } else {
+      console.log("[geo-debug] navigator.permissions not available in this browser");
+    }
+    // --- end temporary setup ---
+
+    if (!("geolocation" in navigator)) {
+      setResolvedCenter(initialCenter);
+      return;
+    }
+
+    // Client-side only: the coordinates never get sent to the server — the viewport fetch in
+    // the effect below only ever sees the resulting map bounds, exactly like any other pan/
+    // zoom. Falls back silently to initialCenter (the server-computed territory average) if
+    // geolocation is unsupported, the user declines the permission prompt, or the request
+    // times out — there's always a sensible map to show either way.
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        // TEMPORARY: full diagnostic dump of what the browser actually returned.
+        console.log("[geo-debug] getCurrentPosition SUCCESS via navigator.geolocation.getCurrentPosition()", {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracyMeters: position.coords.accuracy,
+          altitude: position.coords.altitude,
+          altitudeAccuracyMeters: position.coords.altitudeAccuracy,
+          heading: position.coords.heading,
+          speedMetersPerSecond: position.coords.speed,
+          timestamp: new Date(position.timestamp).toISOString(),
+        });
+
+        if (cancelled) return;
+        setResolvedCenter({ lat: position.coords.latitude, lng: position.coords.longitude });
+      },
+      (error) => {
+        // TEMPORARY: surface the exact error code/message the browser gave.
+        console.log("[geo-debug] getCurrentPosition ERROR", { code: error.code, message: error.message });
+        console.info("Geolocation unavailable, using default map position:", error.message);
+
+        if (cancelled) return;
+        setResolvedCenter(initialCenter);
+      },
+      { enableHighAccuracy: false, timeout: 8000, maximumAge: 5 * 60 * 1000 }
+    );
+
+    return () => {
+      cancelled = true;
+    };
+    // initialCenter is a fresh object every render from the server-rendered parent, but
+    // conceptually static for the lifetime of this page view — depending on it would re-run
+    // the geolocation prompt if this component ever re-rendered for an unrelated reason.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!containerRef.current || !resolvedCenter) return;
 
     const map = new MapLibreMap({
       container: containerRef.current,
       style: getMapStyle(styleIdRef.current).style,
-      center: [initialCenter.lng, initialCenter.lat],
+      center: [resolvedCenter.lng, resolvedCenter.lat],
       zoom: DEFAULT_ZOOM,
     });
     mapRef.current = map;
@@ -297,18 +370,26 @@ export default function TerritoryMap({ initialCenter }: { initialCenter: { lat: 
       popup.remove();
       map.remove();
     };
-    // initialCenter intentionally excluded beyond the mount-time read above: it only seeds the
-    // starting camera position. Switching styles later goes through mapRef.current.setStyle()
-    // in handleSelectStyle below instead of re-running this effect, so the map instance
-    // (camera position, hover/selection state) survives a base-style change.
+    // Runs once resolvedCenter is known (see the geolocation effect above) and never again:
+    // switching styles later goes through mapRef.current.setStyle() in handleSelectStyle below
+    // instead of re-running this effect, so the map instance (camera position, hover/selection
+    // state) survives a base-style change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [resolvedCenter]);
 
   const handleSelectStyle = (id: string) => {
     styleIdRef.current = id;
     setStyleId(id);
     mapRef.current?.setStyle(getMapStyle(id).style);
   };
+
+  if (!resolvedCenter) {
+    return (
+      <Box sx={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <CircularProgress size={32} />
+      </Box>
+    );
+  }
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
