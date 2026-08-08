@@ -25,6 +25,18 @@ export function pick<T>(rng: Rng, items: readonly T[]): T {
   return items[randInt(rng, 0, items.length - 1)];
 }
 
+// Weighted pick by each item's own `.weight` — used for zones/profiles/shapes/distance
+// buckets, where some options should come up far more often than others (spec point 3/9/10).
+export function pickWeighted<T extends { weight: number }>(rng: Rng, items: readonly T[]): T {
+  const total = items.reduce((sum, item) => sum + item.weight, 0);
+  let r = rng() * total;
+  for (const item of items) {
+    r -= item.weight;
+    if (r <= 0) return item;
+  }
+  return items[items.length - 1];
+}
+
 // Box-Muller transform — used for elevation noise and route meander, where a normal
 // distribution looks far more like real terrain/GPS noise than a uniform one.
 export function gaussian(rng: Rng, mean: number, stdDev: number): number {

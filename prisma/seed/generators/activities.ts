@@ -1,7 +1,8 @@
-import { type Rng, randFloat, randInt, pick } from "../lib/random";
-import { generateRoute, type GeneratedRoute, type RouteShape } from "../lib/routeGenerator";
+import { type Rng, randInt, pick } from "../lib/random";
 import { encodePolyline } from "../lib/polylineEncode";
-import { TRAILHEADS } from "../data/trailheads";
+import { generateGraphTrailRoute, type GraphGenerationContext, type GeneratedTrailRoute } from "../lib/graphRouteGenerator";
+import { estimateMovingTimeSeconds } from "../lib/estimateDuration";
+import type { RiderProfile } from "../data/riderProfiles";
 
 const ACTIVITY_NAME_TEMPLATES = [
   "Sortie",
@@ -17,8 +18,6 @@ const ACTIVITY_NAME_TEMPLATES = [
 // for variety, matching how athletes occasionally log a mixed-terrain outing.
 const ACTIVITY_TYPES = ["TrailRun", "TrailRun", "TrailRun", "Run"] as const;
 
-export type AthleteProfile = { paceMinPerKm: number; climbFactor: number };
-
 export type SeedActivityInput = {
   providerActivityId: string;
   name: string;
@@ -28,26 +27,28 @@ export type SeedActivityInput = {
   movingTimeSeconds: number;
   elevationGainMeters: number;
   polyline: string;
-  route: GeneratedRoute;
+  route: GeneratedTrailRoute;
 };
 
-export function generateSeedActivity(rng: Rng, providerActivityId: string, athlete: AthleteProfile): SeedActivityInput {
-  const trailhead = pick(rng, TRAILHEADS);
-  const shape: RouteShape = rng() < 0.7 ? "loop" : "out-and-back";
-  const isLongRun = rng() < 0.12;
-  const targetKm = isLongRun ? randFloat(rng, 32, 55) : randFloat(rng, 5, 28);
+export async function generateSeedActivity(
+  rng: Rng,
+  providerActivityId: string,
+  ctx: GraphGenerationContext,
+  profile: RiderProfile
+): Promise<SeedActivityInput> {
+  const route = await generateGraphTrailRoute(ctx, rng, profile);
 
-  const route = generateRoute(rng, trailhead, targetKm * 1000, shape);
-
-  const paceVariance = randFloat(rng, 0.92, 1.12);
-  const movingTimeSeconds = Math.round(
-    (route.distanceMeters / 1000) * athlete.paceMinPerKm * 60 * paceVariance +
-      (route.elevationGainMeters / 100) * athlete.climbFactor * 60
+  const movingTimeSeconds = estimateMovingTimeSeconds(
+    rng,
+    route.distanceMeters,
+    route.elevationGainMeters,
+    route.elevationLossMeters,
+    profile
   );
 
   return {
     providerActivityId,
-    name: `${pick(rng, ACTIVITY_NAME_TEMPLATES)} - ${trailhead.name}`,
+    name: `${pick(rng, ACTIVITY_NAME_TEMPLATES)} - ${route.zone.label}`,
     type: pick(rng, ACTIVITY_TYPES),
     startDate: randomPastDate(rng),
     distanceMeters: route.distanceMeters,

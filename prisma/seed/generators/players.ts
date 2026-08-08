@@ -1,14 +1,17 @@
-import { type Rng, randFloat } from "../lib/random";
+import { type Rng, randFloat, pickWeighted } from "../lib/random";
 import { PLAYER_PROFILES } from "../data/players";
+import { RIDER_PROFILES, type RiderProfile } from "../data/riderProfiles";
 
 export type SeedPlayerInput = {
   firstName: string;
   lastName: string;
   email: string;
   photoUrl: string;
-  // Not persisted — only used to generate believable per-athlete activity durations.
-  paceMinPerKm: number;
-  climbFactor: number;
+  // Not persisted — drives which routes/pace/duration this player's activities get.
+  profile: RiderProfile;
+  // Relative frequency this player is picked for one of the TOTAL_FAKE_ACTIVITIES activities —
+  // some players are just more active than others (spec point 11/12 variability).
+  activityWeight: number;
 };
 
 const COMBINING_DIACRITICS = /[̀-ͯ]/g;
@@ -22,8 +25,8 @@ export function buildSeedPlayers(rng: Rng): SeedPlayerInput[] {
       // .test is IANA-reserved for testing (RFC 2606) — these addresses can never resolve.
       email: `${slug}@seed.xtrail.test`,
       photoUrl: `https://i.pravatar.cc/300?u=${slug}`,
-      paceMinPerKm: randFloat(rng, 4.8, 8.2),
-      climbFactor: randFloat(rng, 2.2, 4.8),
+      profile: pickWeighted(rng, RIDER_PROFILES),
+      activityWeight: randFloat(rng, 1, 5),
     };
   });
 }
