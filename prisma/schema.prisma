@@ -151,6 +151,14 @@ model Territory {
   // see Activity notes on switching to distance-weighted later).
   ownerPresence Float @map("owner_presence")
 
+  // Cell centroid, cached at write time (see updateTerritoriesForHexagons) purely so the map
+  // can filter by viewport with a plain indexed bbox query. Without this, "which territories
+  // are on screen" would mean loading every territory row and deriving lat/lng from h3Index
+  // with h3-js on every request — measured at ~112k rows, that alone took 2.2s server-side
+  // and produced a 93MB GeoJSON payload regardless of what was actually visible.
+  centerLat Float @map("center_lat")
+  centerLng Float @map("center_lng")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -159,6 +167,8 @@ model Territory {
   owner Player? @relation(fields: [ownerId], references: [id], onDelete: SetNull)
 
   @@index([ownerId])
+  // The map's hot-path query: "territories whose centroid falls within this viewport".
+  @@index([centerLat, centerLng])
   @@map("territories")
 }
 

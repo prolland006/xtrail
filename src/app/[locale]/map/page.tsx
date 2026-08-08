@@ -1,8 +1,7 @@
 import Menu from "@/components/Menu";
 import initTranslations from "@/app/i18n";
 import TranslationsProvider from "@/components/TranslationsProvider";
-import { getTerritories } from "@/services/territory";
-import { territoryFillFeatures, territoryBorderFeatures } from "@/lib/h3";
+import { getTerritoryCount, getTerritoryCenter } from "@/services/territory";
 import { Box, Container, Typography } from "@mui/material";
 import TerritoryMap from "@/components/TerritoryMap";
 
@@ -15,16 +14,18 @@ async function MapPage({
 }) {
   const { t } = await initTranslations(locale, i18nNamespaces);
 
-  // The map's only data source: persisted territories, never a live recalculation from
-  // activities or GPS tracks — see services/territory.ts.
-  const territories = await getTerritories();
+  // Cheap existence/positioning checks only (an indexed count and an aggregate average) — the
+  // map's actual territory data is loaded client-side per viewport, see components/
+  // TerritoryMap.tsx and /api/territories. Loading every territory here like before doesn't
+  // scale: measured at ~112k rows, that took 2.2s server-side and shipped a 93MB payload.
+  const [territoryCount, center] = await Promise.all([getTerritoryCount(), getTerritoryCenter()]);
 
   return (
     <TranslationsProvider namespaces={i18nNamespaces} locale={locale}>
       <Box sx={{ display: "flex", flexDirection: "column", height: "100vh" }}>
         <Menu />
         <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", bgcolor: "background.default" }}>
-          {territories.length === 0 ? (
+          {territoryCount === 0 || !center ? (
             <Container maxWidth="md" sx={{ pt: 3, pb: 6 }}>
               <Box
                 sx={{
@@ -40,10 +41,7 @@ async function MapPage({
             </Container>
           ) : (
             <Box sx={{ flex: 1, minHeight: 0 }}>
-              <TerritoryMap
-                fillFeatures={territoryFillFeatures(territories)}
-                borderFeatures={territoryBorderFeatures(territories)}
-              />
+              <TerritoryMap initialCenter={center} />
             </Box>
           )}
         </Box>

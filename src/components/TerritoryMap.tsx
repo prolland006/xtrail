@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Map as MapLibreMap, LngLatBounds, NavigationControl, Popup, setWorkerUrl } from "maplibre-gl";
-import type { FilterSpecification, LngLat, MapGeoJSONFeature } from "maplibre-gl";
+import { Map as MapLibreMap, NavigationControl, Popup, setWorkerUrl } from "maplibre-gl";
+import type { FilterSpecification, GeoJSONSource, LngLat, MapGeoJSONFeature } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { TerritoryFillFeature, TerritoryBorderFeature } from "@/lib/h3";
 import { DEFAULT_MAP_STYLE_ID, getMapStyle } from "@/map/mapStyles";
@@ -13,6 +13,11 @@ import MapStyleSelector from "@/map/MapStyleSelector";
 // of the JS file. Serving it as a static asset (copied by scripts/copy-maplibre-worker.js) and
 // pointing MapLibre at it directly works around this.
 setWorkerUrl("/maplibre-gl-worker.mjs");
+
+// A fixed "reasonable local area" zoom rather than fitting every territory in view on load —
+// with data spread across an 80km radius, "fit everything" would mean starting zoomed out over
+// the whole region, which is exactly the unscalable case this component now avoids.
+const DEFAULT_ZOOM = 12;
 
 // Deterministic per-owner color: the golden angle spreads consecutive owner IDs across
 // hues that stay visually distinct even for many owners, with no palette to run out of.
@@ -25,33 +30,34 @@ type ColoredFillFeature = TerritoryFillFeature & {
   properties: TerritoryFillFeature["properties"] & { color: string };
 };
 
+type TerritoriesResponse = {
+  fill: TerritoryFillFeature[];
+  borders: TerritoryBorderFeature[];
+  truncated: boolean;
+};
+
 // Filter value that can never match a real h3Index, used to "clear" the selected-outline layer
 // (MapLibre has no setFilter(null) that means "match nothing").
 const NO_SELECTION_FILTER = ["==", ["get", "h3Index"], ""] as unknown as FilterSpecification;
 
 /**
- * Pure rendering: both the fill polygons and the frontier-only border lines already come
- * fully formed from the server (see lib/h3.ts#territoryFillFeatures / territoryBorderFeatures,
- * built from the persisted Territory table — see services/territory.ts). This component never
- * decodes a polyline, computes an H3 cell, or works out which hexagon edges are frontiers —
- * it only turns known GeoJSON into map layers and assigns display color, per the map
- * architecture rules (React components must never calculate H3 indexes). Choosing among base
- * map styles, and how territories look on hover/selection, are display-only concerns and stay
- * here too — see src/map/mapStyles.ts for the style registry and per-theme paint values.
+ * Pure rendering, but data is fetched per viewport rather than received whole: on load and on
+ * every pan/zoom, this asks /api/territories for just the territories visible in the current
+ * bounds (see services/territory.ts#getTerritoriesInBounds) and swaps the GeoJSON sources'
+ * data. Neither this component nor the API route it calls decodes a polyline, computes an H3
+ * cell, or works out which hexagon edges are frontiers on the client — the fill/border GeoJSON
+ * already comes fully formed from the server (lib/h3.ts), per the map architecture rules.
+ * Choosing among base map styles, and how territories look on hover/selection, are display-only
+ * concerns and stay here too — see src/map/mapStyles.ts for the style registry.
  */
-export default function TerritoryMap({
-  fillFeatures,
-  borderFeatures,
-}: {
-  fillFeatures: TerritoryFillFeature[];
-  borderFeatures: TerritoryBorderFeature[];
-}) {
+export default function TerritoryMap({ initialCenter }: { initialCenter: { lat: number; lng: number } }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
 
   // Latest colored fill / border features, read by the style.load handler below — a ref
   // rather than a closure variable so switching base styles (which re-fires style.load)
-  // re-adds the layers without needing to recreate the whole map instance.
+  // re-adds the layers without needing to recreate the whole map instance, and so a viewport
+  // refetch can update already-added sources directly via setData.
   const territoryDataRef = useRef<{ fill: ColoredFillFeature[]; borders: TerritoryBorderFeature[] }>({
     fill: [],
     borders: [],
@@ -62,32 +68,64 @@ export default function TerritoryMap({
   const [styleId, setStyleId] = useState(DEFAULT_MAP_STYLE_ID);
   const styleIdRef = useRef(styleId);
 
+  const [truncated, setTruncated] = useState(false);
+
   useEffect(() => {
-    if (!containerRef.current || fillFeatures.length === 0) return;
-
-    // Color is a display-only concern (not territory logic), so it's assigned here rather
-    // than repeated in the server payload for every one of thousands of same-owner hexagons.
-    const coloredFillFeatures: ColoredFillFeature[] = fillFeatures.map((feature) => ({
-      ...feature,
-      properties: { ...feature.properties, color: colorForOwner(feature.properties.ownerId) },
-    }));
-    territoryDataRef.current = { fill: coloredFillFeatures, borders: borderFeatures };
-
-    const firstPoint = coloredFillFeatures[0].geometry.coordinates[0][0];
-    const bounds = coloredFillFeatures.reduce((acc, feature) => {
-      for (const coord of feature.geometry.coordinates[0]) acc.extend(coord);
-      return acc;
-    }, new LngLatBounds(firstPoint, firstPoint));
+    if (!containerRef.current) return;
 
     const map = new MapLibreMap({
       container: containerRef.current,
       style: getMapStyle(styleIdRef.current).style,
-      bounds,
-      fitBoundsOptions: { padding: 48 },
+      center: [initialCenter.lng, initialCenter.lat],
+      zoom: DEFAULT_ZOOM,
     });
     mapRef.current = map;
 
     map.addControl(new NavigationControl(), "top-right");
+
+    const applyTerritoryData = (fill: TerritoryFillFeature[], borders: TerritoryBorderFeature[]) => {
+      // Color is a display-only concern (not territory logic), so it's assigned here rather
+      // than repeated in the server payload for every one of thousands of same-owner hexagons.
+      const coloredFill: ColoredFillFeature[] = fill.map((feature) => ({
+        ...feature,
+        properties: { ...feature.properties, color: colorForOwner(feature.properties.ownerId) },
+      }));
+      territoryDataRef.current = { fill: coloredFill, borders };
+
+      const fillSource = map.getSource<GeoJSONSource>("territories-fill");
+      const borderSource = map.getSource<GeoJSONSource>("territories-borders");
+      fillSource?.setData({ type: "FeatureCollection", features: coloredFill });
+      borderSource?.setData({ type: "FeatureCollection", features: borders });
+    };
+
+    // Aborts a still-in-flight fetch when a new one starts (e.g. rapid successive zooms) so a
+    // slow, stale response can't overwrite what's already on screen for the current viewport.
+    let inFlight: AbortController | null = null;
+
+    const refreshTerritories = async () => {
+      inFlight?.abort();
+      const controller = new AbortController();
+      inFlight = controller;
+
+      const bounds = map.getBounds();
+      const params = new URLSearchParams({
+        minLat: String(bounds.getSouth()),
+        maxLat: String(bounds.getNorth()),
+        minLng: String(bounds.getWest()),
+        maxLng: String(bounds.getEast()),
+      });
+
+      try {
+        const res = await fetch(`/api/territories?${params}`, { signal: controller.signal });
+        if (!res.ok) return;
+        const data: TerritoriesResponse = await res.json();
+        applyTerritoryData(data.fill, data.borders);
+        setTruncated(data.truncated);
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.error("Failed to load territories for viewport", err);
+      }
+    };
 
     // Fires after the initial style loads, and again every time setStyle() swaps the base
     // map — MapLibre drops runtime-added sources/layers on a style swap, so they need to be
@@ -140,10 +178,8 @@ export default function TerritoryMap({
         source: "territories-borders",
         // At HEX_DIAMETER_METERS ≈ 250m, a hexagon is only a few screen pixels wide below
         // zoom ~11 — thousands of frontier edges packed into that many pixels render as a
-        // dense scribble rather than readable borders (visible on a fresh account's default
-        // view, which fits the whole span of every imported activity). The colored fill layer
-        // has no such minzoom, so territories still read as soft colored regions before you
-        // zoom in on them.
+        // dense scribble rather than readable borders. The colored fill layer has no such
+        // minzoom, so territories still read as soft colored regions before you zoom in.
         minzoom: 11,
         paint: {
           "line-color": theme.borderColor,
@@ -170,6 +206,8 @@ export default function TerritoryMap({
     };
 
     map.on("style.load", addTerritoryLayers);
+    map.on("load", refreshTerritories);
+    map.on("moveend", refreshTerritories);
 
     // --- Hover, selection and the ownership popup. Registered once (not inside style.load)
     // since MapLibre keeps layer-filtered event listeners across a style swap even though the
@@ -254,16 +292,17 @@ export default function TerritoryMap({
     });
 
     return () => {
+      inFlight?.abort();
       mapRef.current = null;
       popup.remove();
       map.remove();
     };
-    // styleId intentionally excluded: it only seeds the initial style. Switching styles later
-    // goes through mapRef.current.setStyle() in handleSelectStyle below instead of re-running
-    // this effect, so the map instance (camera position, hover/selection state) survives a
-    // base-style change.
+    // initialCenter intentionally excluded beyond the mount-time read above: it only seeds the
+    // starting camera position. Switching styles later goes through mapRef.current.setStyle()
+    // in handleSelectStyle below instead of re-running this effect, so the map instance
+    // (camera position, hover/selection state) survives a base-style change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fillFeatures, borderFeatures]);
+  }, []);
 
   const handleSelectStyle = (id: string) => {
     styleIdRef.current = id;
@@ -275,6 +314,22 @@ export default function TerritoryMap({
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
       <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
       <MapStyleSelector styleId={styleId} onSelect={handleSelectStyle} />
+      {truncated && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 12,
+            left: 12,
+            padding: "4px 10px",
+            borderRadius: 8,
+            background: "rgba(17, 24, 39, 0.75)",
+            color: "white",
+            fontSize: 12,
+          }}
+        >
+          Zoomez pour voir plus de détail
+        </div>
+      )}
     </div>
   );
 }
